@@ -1,4 +1,17 @@
-export CUDA_VISIBLE_DEVICES=2
+#!/bin/bash
+
+#SBATCH --job-name=DLinear_ETTh1
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --time=0-12:00:00
+#SBATCH --mem=80000MB
+#SBATCH --cpus-per-task=16
+#SBATCH --output=./folder/S-%x.%j.out
+
+eval "$(conda shell.bash hook)"
+conda activate timeSeries
+
+export CUDA_VISIBLE_DEVICES=0
 
 model_name=DLinear
 
@@ -21,7 +34,9 @@ python -u run.py \
   --dec_in 7 \
   --c_out 7 \
   --des 'Exp' \
-  --itr 1
+  --itr 1 \
+  --combined_loss \
+  --alpha_frequency_loss 0.1
 
 python -u run.py \
   --task_name long_term_forecast \
@@ -42,7 +57,9 @@ python -u run.py \
   --dec_in 7 \
   --c_out 7 \
   --des 'Exp' \
-  --itr 1
+  --itr 1 \
+  --combined_loss \
+  --alpha_frequency_loss 0.1
 
 python -u run.py \
   --task_name long_term_forecast \
@@ -63,7 +80,9 @@ python -u run.py \
   --dec_in 7 \
   --c_out 7 \
   --des 'Exp' \
-  --itr 1
+  --itr 1 \
+  --combined_loss \
+  --alpha_frequency_loss 0.1
 
 python -u run.py \
   --task_name long_term_forecast \
@@ -84,4 +103,6 @@ python -u run.py \
   --dec_in 7 \
   --c_out 7 \
   --des 'Exp' \
-  --itr 1
+  --itr 1 \
+  --combined_loss \
+  --alpha_frequency_loss 0.1

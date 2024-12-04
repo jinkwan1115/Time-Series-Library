@@ -93,6 +93,8 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
+    parser.add_argument('--combined_loss', action='store_true', help='use combined loss', default=False)
+    parser.add_argument('--alpha_frequency_loss', type=float, default=0.1, help='alpha for frequency loss')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 

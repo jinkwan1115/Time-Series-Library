@@ -11,6 +11,7 @@ import warnings
 import numpy as np
 from utils.dtw_metric import dtw,accelerated_dtw
 from utils.augmentation import run_augmentation,run_augmentation_single
+from utils.losses import CombinedLoss
 
 warnings.filterwarnings('ignore')
 
@@ -36,7 +37,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
     def _select_criterion(self):
         criterion = nn.MSELoss()
-        return criterion
+        # combined loss
+        if self.args.combined_loss:
+            criterion_ = CombinedLoss(alpha=self.args.alpha_frequency_loss)
+        return criterion, criterion_
 
     def vali(self, vali_data, vali_loader, criterion):
         total_loss = []
@@ -87,7 +91,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
-        criterion = self._select_criterion()
+        criterion, criterion_ = self._select_criterion()
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -114,20 +118,37 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        # outputs dimension: [batch_size, pred_len, num_features]
 
                         f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
-                        train_loss.append(loss.item())
+
+                        if self.args.combined_loss:
+                            outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
+                            outputs = outputs[:, :, f_dim:]
+                            batch_y = batch_y[:, :, f_dim:].to(self.device)
+                            loss = criterion_(outputs, batch_y)
+                            train_loss.append(loss.item())
+                        else:
+                            outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                            loss = criterion(outputs, batch_y)
+                            train_loss.append(loss.item())
                 else:
                     outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                     f_dim = -1 if self.args.features == 'MS' else 0
-                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
-                    train_loss.append(loss.item())
+
+                    if self.args.combined_loss:
+                            outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
+                            outputs = outputs[:, :, f_dim:]
+                            batch_y = batch_y[:, :, f_dim:].to(self.device)
+                            loss = criterion_(outputs, batch_y)
+                            train_loss.append(loss.item())
+                    else:
+                        outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                        loss = criterion(outputs, batch_y)
+                        train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))

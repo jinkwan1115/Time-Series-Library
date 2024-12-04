@@ -87,3 +87,33 @@ class mase_loss(nn.Module):
         masep = t.mean(t.abs(insample[:, freq:] - insample[:, :-freq]), dim=1)
         masked_masep_inv = divide_no_nan(mask, masep[:, None])
         return t.mean(t.abs(target - forecast) * masked_masep_inv)
+
+class FrequencyLoss(nn.Module):
+    def __init__(self):
+        super(FrequencyLoss, self).__init__()
+    
+    def forward(self, predictions, targets):
+        # Fourier Transform
+        pred_fft = t.fft.fft(predictions, dim=-1)
+        target_fft = t.fft.fft(targets, dim=-1)
+
+        pred_magnitude = t.abs(pred_fft)
+        target_magnitude = t.abs(target_fft)
+
+        freq_loss = t.mean(t.abs(pred_magnitude - target_magnitude))
+        # freq_loss = t.mean((pred_magnitude - target_magnitude) ** 2)
+
+        return freq_loss
+
+class CombinedLoss(nn.Module):
+    def __init__(self, alpha=0.1):
+        super(CombinedLoss, self).__init__()
+        self.alpha = alpha
+        self.mse_loss = nn.MSELoss()
+        self.freq_loss = FrequencyLoss()
+    
+    def forward(self, predictions, targets):
+        mse_loss = self.mse_loss(predictions, targets)
+        freq_loss = self.freq_loss(predictions, targets)
+
+        return self.alpha * freq_loss + mse_loss
