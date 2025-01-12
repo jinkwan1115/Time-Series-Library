@@ -25,16 +25,24 @@ class moving_avg(nn.Module):
 
     def __init__(self, kernel_size, stride):
         super(moving_avg, self).__init__()
-        self.kernel_size = kernel_size
+        self.kernel_size = kernel_size # default: 25
         self.avg = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=0)
 
-    def forward(self, x):
-        # padding on the both ends of time series
+    def forward(self, x): # example dimension [32, 96, 7]
+        # (first, last) padding on the both ends of time series
+        # x[:, 0:1, :] -> [32, 1, 7] select the first element of each sequence
+        # .repeat(1, 12, 1) -> [32, 12, 7] copy 12 times in the second dimension(sequence)
         front = x[:, 0:1, :].repeat(1, (self.kernel_size - 1) // 2, 1)
-        end = x[:, -1:, :].repeat(1, (self.kernel_size - 1) // 2, 1)
-        x = torch.cat([front, x, end], dim=1)
+        # x[:, -1:, :] -> [32, 1, 7] select the last element of each sequence
+        # .repeat(1, 12, 1) -> [32, 12, 7] copy 12 times in the second dimension(sequence)
+        end = x[:, -1:, :].repeat(1, (self.kernel_size - 1) // 2, 1) 
+        # torch.cat([front, x, end], dim=1) -> [32, 12+96+12, 7] concatenate the front and end with the original sequence
+        x = torch.cat([front, x, end], dim=1) 
+        # x.permute(0, 2, 1) -> [32, 7, 12+96+12] transpose the dimension of the sequence and feature
+        # self.avg(x.permute(0, 2, 1)) -> [32, 7, 96] average pooling(mean) in the sequence dimension for each feature
         x = self.avg(x.permute(0, 2, 1))
-        x = x.permute(0, 2, 1)
+        # x.permute(0, 2, 1) -> [32, 96, 7] restore the original dimension
+        x = x.permute(0, 2, 1) 
         return x
 
 

@@ -8,7 +8,9 @@ __pycache__/
 
 # folder / test_results
 /test_results/
-/folder/
+/log/
+/results/
+/checkpoints/
 
 # Distribution / packaging
 .Python
