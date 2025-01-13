@@ -12,7 +12,7 @@ import numpy as np
 from utils.dtw_metric import dtw,accelerated_dtw
 from utils.dilate import Dilate
 from utils.augmentation import run_augmentation,run_augmentation_single
-from utils.losses import CombinedLoss
+from utils.losses import Loss
 #import wandb
 
 warnings.filterwarnings('ignore')
@@ -57,18 +57,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return model_optim
 
     def _select_criterion(self):
-        criterion_base = nn.MSELoss()
-        # new train loss
-        if self.args.loss == "combined_loss":
-            criterion_train_new = CombinedLoss(self.args)
-        # elif self.args.loss == "window_shape_loss":
-        #     criterion_train_new = WindowShapeLoss(self.args)
-        # elif self.args.loss == "learned_repr_loss":
-        #     criterion_train_new = LearnedReprLoss(self.args)
-        # elif self.args.loss == "dilate_loss":
-        #     criterion_train_new = DilateLoss(self.args)
-        else:
+        if self.args.additional is None:
+            if self.args.base == "MSE":
+                criterion_base = nn.MSELoss()
+            elif self.args.base == "MAE":
+                criterion_base = nn.L1Loss()
             criterion_train_new = None
+        else: # additional loss
+            criterion_base = nn.MSELoss() # only for vali and test loss calculation
+            criterion_train_new = Loss(self.args)
         
         # new vali metric
         if self.args.vali_metric == "dilate":
@@ -161,7 +158,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                         f_dim = -1 if self.args.features == 'MS' else 0
 
-                        if self.args.loss == "combined_loss":
+                        if self.args.additional is not None:
                             if self.args.include_input_range:
                                 outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
                                 outputs = outputs[:, :, f_dim:]
@@ -183,7 +180,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                     f_dim = -1 if self.args.features == 'MS' else 0
 
-                    if self.args.loss == "combined_loss":
+                    if self.args.additional is not None:
                         if self.args.include_input_range:
                             outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
                             outputs = outputs[:, :, f_dim:]
@@ -306,7 +303,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 preds.append(pred)
                 trues.append(true)
-                if i % 20 == 0:
+                if i % 5 == 0:
                     #input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
                         shape = input.shape
@@ -315,7 +312,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
                     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
-        inputs = np.concatenate(inputs_list, axis=0)
+        inputs = np.concatenate(inputs, axis=0)
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
         print('test shape:', preds.shape, trues.shape)

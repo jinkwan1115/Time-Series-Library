@@ -6,12 +6,6 @@ __pycache__/
 # C extensions
 *.so
 
-# folder / test_results
-/test_results/
-/log/
-/results/
-/checkpoints/
-
 # Distribution / packaging
 .Python
 build/
@@ -164,8 +158,10 @@ data_loader_all.py
 /utils/self_tools.py
 /scripts/exp_scripts/
 
+log/
 checkpoints/
 results/
+test_results/
 result_long_term_forecast.txt
 result_anomaly_detection.txt
 scripts/augmentation/

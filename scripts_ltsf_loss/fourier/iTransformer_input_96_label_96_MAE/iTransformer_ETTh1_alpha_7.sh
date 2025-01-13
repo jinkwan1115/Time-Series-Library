@@ -38,10 +38,11 @@ python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
   --d_model 128 \
   --d_ff 128 \
   --itr 1 \
-  --loss 'combined_loss' \
-  --alpha_additional_loss 0.7 \
-  --use_freq \
-  --freq_loss_type complex \
+  --base 'MSE' \
+  --additional 'fourier' \
+  --alpha 0.7 \
+  --fourier_loss_type complex \
+  --include_input_range \
   --vali_metric 'dilate' \
 
 python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
@@ -66,10 +67,11 @@ python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
   --d_model 128 \
   --d_ff 128 \
   --itr 1 \
-  --loss 'combined_loss' \
-  --alpha_additional_loss 0.7 \
-  --use_freq \
-  --freq_loss_type complex \
+  --base 'MSE' \
+  --additional 'fourier' \
+  --alpha 0.7 \
+  --fourier_loss_type complex \
+  --include_input_range \
   --vali_metric 'dilate' \
 
 python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
@@ -94,10 +96,11 @@ python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
   --d_model 128 \
   --d_ff 128 \
   --itr 1 \
-  --loss 'combined_loss' \
-  --alpha_additional_loss 0.7 \
-  --use_freq \
-  --freq_loss_type complex \
+  --base 'MSE' \
+  --additional 'fourier' \
+  --alpha 0.7 \
+  --fourier_loss_type complex \
+  --include_input_range \
   --vali_metric 'dilate' \
 
 python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
@@ -122,8 +125,9 @@ python -u /home/jinkwanjang/Time-Series-Library/run_freq.py \
   --d_model 128 \
   --d_ff 128 \
   --itr 1 \
-  --loss 'combined_loss' \
-  --alpha_additional_loss 0.7 \
-  --use_freq \
-  --freq_loss_type complex \
+  --base 'MSE' \
+  --additional 'fourier' \
+  --alpha 0.7 \
+  --fourier_loss_type complex \
+  --include_input_range \
   --vali_metric 'dilate' \

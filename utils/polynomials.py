@@ -82,3 +82,7 @@ def legendre_torch(data, degree, rtn_data=False, device='cpu'):
     ndim = data.ndim
     shape = data.shape
 
+def chebyshev_torch(data, degree, rtn_data=False, device='cpu'):
+    degree += 1
+    ndim = data.ndim
+    shape = data.shape

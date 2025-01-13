@@ -96,16 +96,18 @@ if __name__ == '__main__':
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
     # loss function
-    parser.add_argument('--loss', type=str, default='MSE', help='loss function(MSE, combined_loss, window_shape_loss, learned_repr_loss, dilate_loss)')
-    parser.add_argument('--alpha_additional_loss', type=float, default=0.1, help='alpha for additional loss')
+    parser.add_argument('--base', type=str, default='MSE', help='base loss function(MSE, MAE)')
+    parser.add_argument('--additional', type=str, default=None, help='additional loss function(window, fourier, laguerre)')
+    parser.add_argument('--alpha', type=float, default=0.1, help='alpha for additional loss')
     parser.add_argument('--include_input_range', action='store_true', help='include input range in loss', default=False)
-    # Combined loss - laguerre
-    parser.add_argument('--use_laguerre', action='store_true', help='use laguerre loss', default=False)
+    # additional loss - window
+    parser.add_argument('--distance', type=str, default='EM', help='distance for window loss')
+    parser.add_argument('--temp_to', type=str, default='both', help='temp to for window loss')
+    parser.add_argument('--temp', type=float, default=0.01, help='temp for window loss')
+    # additional loss - laguerre
     parser.add_argument('--degree', type=int, default=5, help='degree of laguerre polynomial')
-    # Combined loss - frequency(fourier)
-    parser.add_argument('--use_freq', action='store_true', help='use frequency loss', default=False)
-    parser.add_argument('--freq_loss_type', type=str, default='complex', help='type of frequency loss')
-
+    # additional loss - fourier
+    parser.add_argument('--fourier_loss_type', type=str, default='complex', help='type of frequency loss')
 
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
@@ -192,7 +194,7 @@ if __name__ == '__main__':
         for ii in range(args.itr):
             # setting record of experiments
             exp = Exp(args)  # set experiments
-            setting = '{}_{}_{}_ft{}_{}_loss{}_freq{}_type{}_alpha{}_{}'.format(
+            setting = '{}_{}_{}_ft{}_{}_loss{}_additional{}_type{}_alpha{}_{}'.format(
                 args.task_name,
                 args.model_id,
                 args.model,
@@ -212,10 +214,10 @@ if __name__ == '__main__':
                 #args.embed,
                 #args.distil,
                 args.des,
-                args.loss,
-                args.use_freq,
-                args.freq_loss_type,
-                args.alpha_additional_loss, ii)
+                args.base,
+                args.additional,
+                args.fourier_loss_type,
+                args.alpha, ii)
 
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
             exp.train(setting)
@@ -228,7 +230,7 @@ if __name__ == '__main__':
                 torch.cuda.empty_cache()
     else:
         ii = 0
-        setting = '{}_{}_{}_ft{}_{}_loss{}_freq{}_type{}_alpha{}_{}'.format(
+        setting = '{}_{}_{}_ft{}_{}_loss{}_additional{}_type{}_alpha{}_{}'.format(
             args.task_name,
             args.model_id,
             args.model,
@@ -248,10 +250,10 @@ if __name__ == '__main__':
             #args.embed,
             #args.distil,
             args.des,
-            args.loss,
-            args.use_freq,
-            args.freq_loss_type,
-            args.alpha_additional_loss, ii)
+            args.base,
+            args.additional,
+            args.fourier_loss_type,
+            args.alpha, ii)
 
         exp = Exp(args)  # set experiments
         print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))

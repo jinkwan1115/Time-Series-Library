@@ -13,7 +13,7 @@
 # implied). Copyright © 2020 Element AI Inc. All rights reserved.
 
 """
-Loss functions for PyTorch.
+Various Loss functions for Time Series Analysis
 """
 
 import torch as t
@@ -21,7 +21,7 @@ import torch.nn as nn
 import numpy as np
 import pdb
 
-from utils.polynomials import laguerre_torch
+from utils.polynomials import laguerre_torch, hermite_torch, legendre_torch, chebyshev_torch
 
 def divide_no_nan(a, b):
     """
@@ -89,63 +89,88 @@ class mase_loss(nn.Module):
         masked_masep_inv = divide_no_nan(mask, masep[:, None])
         return t.mean(t.abs(target - forecast) * masked_masep_inv)
 
+# jinmyeong
+class WindowShapeLoss(nn.Module):
+    def __init__(self, base, distance="EM", temp_to="both", temp=0.01):
+        super(WindowShapeLoss, self).__init__()
+        self.distance = distance
+        if temp_to == "both":
+            self.temp_p, self.temp_q = temp, temp
+        elif temp_to == "true":
+            self.temp_p, self.temp_q = 1, temp
+        else:
+            self.temp_p, self.temp_q = temp, 1
+
+    def dist_loss(self, predictions, targets):
+        p = t.softmax(predictions/self.temp_p, -1) + 1e-8 # epsilon(1e-8) is to avoid division by zero
+        q = t.softmax(targets/self.temp_q, -1) + 1e-8 # epsilon(1e-8) is to avoid division by zero
+        if self.distance == "KL":
+            distance = t.mean(t.sum(p * t.log(p / q)), dim=0)
+        elif self.distance == "EM":
+            cdf_p = t.cumsum(p, dim=-1)
+            cdf_q = t.cumsum(q, dim=-1)
+            distance = t.mean(t.abs(cdf_p - cdf_q))
+        return distance
+
+    def forward(self, predictions, targets):
+        return self.dist_loss(predictions, targets)
+
+# FreDF
 class FrequencyLoss(nn.Module):
     def __init__(self, args):
         super(FrequencyLoss, self).__init__()
         self.args = args
+
     def forward(self, predictions, targets):
         # Fourier Transform
         pred_fft = t.fft.rfft(predictions, dim=1)
         target_fft = t.fft.rfft(targets, dim=1)
 
         # Frequency Loss - Complex
-        if self.args.freq_loss_type == 'complex':
+        if self.args.fourier_loss_type == 'complex':
             
             freq_loss = pred_fft - target_fft
-
             # if self.args.loss == 'MSE':
             #     freq_loss = t.mean(t.abs(freq_loss) ** 2)
-
             #if self.args.loss == 'MAE':
             freq_loss = t.mean(t.abs(freq_loss))
 
         # Frequency Loss - Magnitude
-        if self.args.freq_loss_type == 'mag':
+        if self.args.fourier_loss_type == 'mag':
 
             pred_fft_mag = t.abs(pred_fft)
             target_fft_mag = t.abs(target_fft)
 
             freq_loss = pred_fft_mag - target_fft_mag
-
             # if self.args.loss == 'MSE': 
             #     freq_loss = t.mean(t.abs(freq_loss) ** 2)
-
             #if self.args.loss == 'MAE':
             freq_loss = t.mean(t.abs(freq_loss))
         
         # Frequency Loss - Phase
-        if self.args.freq_loss_type == 'phase':
+        if self.args.fourier_loss_type == 'phase':
 
             pred_fft_phase = t.angle(pred_fft)
             target_fft_phase = t.angle(target_fft)
 
             freq_loss = pred_fft_phase - target_fft_phase
-
             # if self.args.loss == 'MSE':     
             #     freq_loss = t.mean(t.abs(freq_loss) ** 2)
-
             #if self.args.loss == 'MAE':
             freq_loss = t.mean(t.abs(freq_loss))
 
         return freq_loss
 
+# Laguerre Transform
 class LaguerreLoss(nn.Module):
     def __init__(self, args):
         super(LaguerreLoss, self).__init__()
-        self.degree = args.degree
-        self.device = args.device
+        self.args = args
+        self.degree = self.args.degree
+        self.device = self.args.device
 
     def forward(self, predictions, targets):
+        
         pred_laguerre = laguerre_torch(predictions, degree=self.degree, rtn_data=False, device=self.device)
         target_laguerre = laguerre_torch(targets, degree=self.degree, rtn_data=False, device=self.device)
         
@@ -153,20 +178,31 @@ class LaguerreLoss(nn.Module):
 
         return laguerre_loss
 
-class CombinedLoss(nn.Module):
+class Loss(nn.Module):
     def __init__(self, args):
-        super(CombinedLoss, self).__init__()
+        super(Loss, self).__init__()
         self.args = args
-        self.alpha = args.alpha_additional_loss
-        self.mse_loss = nn.MSELoss()
-        self.freq_loss = FrequencyLoss(args)
-        self.laguerre_loss = LaguerreLoss(args)
-    
-    def forward(self, predictions, targets):
-        mse_loss = self.mse_loss(predictions, targets)
-        if self.args.use_laguerre:
-            additional_loss = self.laguerre_loss(predictions, targets)
-        if self.args.use_freq:
-            additional_loss = self.freq_loss(predictions, targets)
+        self.alpha = self.args.alpha
+        self.base = self.args.base
+        self.distance = self.args.distance
+        self.temp_to = self.args.temp_to
+        self.temp = self.args.temp
+        
+        if self.args.additional == "window":
+            self.additional_loss = WindowShapeLoss(self.base, self.distance, self.temp_to, self.temp)
+        elif self.args.additional == "fourier":
+            self.additional_loss = FrequencyLoss(self.args)
+        elif self.args.additional == "laguerre":
+            self.additional_loss = LaguerreLoss(self.args)
+        # TODO: add other additional losses(legendre, chebyshev, etc.)
 
-        return self.alpha * additional_loss + (1 - self.alpha) * mse_loss
+    def forward(self, predictions, targets):
+        if self.args.base == "MSE":
+            self.base_loss = nn.MSELoss()
+        elif self.args.base == "MAE":
+            self.base_loss = nn.L1Loss()
+        
+        if self.alpha == 0:
+            return self.base_loss(predictions, targets)
+        else:
+            return (1 - self.alpha) * self.base_loss(predictions, targets) + self.alpha * self.additional_loss(predictions, targets)
