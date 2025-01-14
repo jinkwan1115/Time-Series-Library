@@ -22,6 +22,7 @@ import numpy as np
 import pdb
 
 from utils.polynomials import laguerre_torch, hermite_torch, legendre_torch, chebyshev_torch
+from utils.cka import cka_torch
 
 def divide_no_nan(a, b):
     """
@@ -89,6 +90,7 @@ class mase_loss(nn.Module):
         masked_masep_inv = divide_no_nan(mask, masep[:, None])
         return t.mean(t.abs(target - forecast) * masked_masep_inv)
 
+
 # jinmyeong
 class WindowShapeLoss(nn.Module):
     def __init__(self, base, distance="EM", temp_to="both", temp=0.01):
@@ -115,7 +117,8 @@ class WindowShapeLoss(nn.Module):
     def forward(self, predictions, targets):
         return self.dist_loss(predictions, targets)
 
-# FreDF
+
+# FreDF (Fourier Transform)
 class FrequencyLoss(nn.Module):
     def __init__(self, args):
         super(FrequencyLoss, self).__init__()
@@ -161,6 +164,7 @@ class FrequencyLoss(nn.Module):
 
         return freq_loss
 
+
 # Laguerre Transform
 class LaguerreLoss(nn.Module):
     def __init__(self, args):
@@ -178,6 +182,85 @@ class LaguerreLoss(nn.Module):
 
         return laguerre_loss
 
+
+# Legendre Transform
+class LegendreLoss(nn.Module):
+    def __init__(self, args):
+        super(LegendreLoss, self).__init__()
+        self.args = args
+        self.degree = self.args.degree
+        self.device = self.args.device
+
+    def forward(self, predictions, targets):
+        
+        pred_legendre = legendre_torch(predictions, degree=self.degree, rtn_data=False, device=self.device)
+        target_legendre = legendre_torch(targets, degree=self.degree, rtn_data=False, device=self.device)
+        
+        legendre_loss = t.mean(t.abs(pred_legendre - target_legendre))
+
+        return legendre_loss
+
+
+# Chebyshev Transform
+class ChebyshevLoss(nn.Module):
+    def __init__(self, args):
+        super(ChebyshevLoss, self).__init__()
+        self.args = args
+        self.degree = self.args.degree
+        self.device = self.args.device
+
+    def forward(self, predictions, targets):
+
+        pred_chebyshev = chebyshev_torch(predictions, degree=self.degree, rtn_data=False, device=self.device)
+        target_chebyshev = chebyshev_torch(targets, degree=self.degree, rtn_data=False, device=self.device)
+        
+        chebyshev_loss = t.mean(t.abs(pred_chebyshev - target_chebyshev))
+
+        return chebyshev_loss
+
+
+# Hermite Transform
+class HermiteLoss(nn.Module):
+    def __init__(self, args):
+        super(HermiteLoss, self).__init__()
+        self.args = args
+        self.degree = self.args.degree
+        self.device = self.args.device
+
+    def forward(self, predictions, targets):
+        
+        pred_hermite = hermite_torch(predictions, degree=self.degree, rtn_data=False, device=self.device)
+        target_hermite = hermite_torch(targets, degree=self.degree, rtn_data=False, device=self.device)
+        
+        hermite_loss = t.mean(t.abs(pred_hermite - target_hermite))
+
+        return hermite_loss
+
+
+# Representation CKA Loss
+class ReprCKALoss(nn.Module):
+    def __init__(self, args):
+        super(ReprCKALoss, self).__init__()
+        self.args = args
+        self.loss_model = t.load(self.args.loss_model_path)
+        self.enc_embedding = self.loss_model.enc_embedding
+        self.encoder = self.loss_model.encoder
+
+    def forward(self, predictions, targets):
+        # TODO: Implement ReprLoss
+        repr_pred = self.enc_embedding(predictions)
+        repr_pred = self.encoder(repr_pred)
+
+        repr_target = self.enc_embedding(targets)
+        repr_target = self.encoder(repr_target)
+
+        #CKA(Centered Kernel Alignment) loss
+        repr_CKA_loss = cka_torch(repr_pred, repr_target)
+
+        return repr_CKA_loss
+
+
+########################################################################################################
 class Loss(nn.Module):
     def __init__(self, args):
         super(Loss, self).__init__()
@@ -194,7 +277,16 @@ class Loss(nn.Module):
             self.additional_loss = FrequencyLoss(self.args)
         elif self.args.additional == "laguerre":
             self.additional_loss = LaguerreLoss(self.args)
-        # TODO: add other additional losses(legendre, chebyshev, etc.)
+        elif self.args.additional == "legendre":
+            self.additional_loss = LegendreLoss(self.args)
+        elif self.args.additional == "chebyshev":
+            self.additional_loss = ChebyshevLoss(self.args)
+        elif self.args.additional == "hermite":
+            self.additional_loss = HermiteLoss(self.args)
+        elif self.args.additional == "repr_cka":
+            self.additional_loss = ReprCKALoss(self.args)
+        else:
+            raise ValueError("Invalid additional loss type")
 
     def forward(self, predictions, targets):
         if self.args.base == "MSE":
