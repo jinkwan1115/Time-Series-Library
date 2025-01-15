@@ -12,7 +12,8 @@ import numpy as np
 from utils.dtw_metric import dtw,accelerated_dtw
 from utils.dilate import Dilate
 from utils.augmentation import run_augmentation,run_augmentation_single
-from utils.losses import CombinedLoss
+from utils.losses import Loss
+#from utils.pc_model import Model, PC_Model
 #import wandb
 
 warnings.filterwarnings('ignore')
@@ -21,6 +22,7 @@ warnings.filterwarnings('ignore')
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Long_Term_Forecast, self).__init__(args)
+        #self.get_topo_feature = PC_Model(args).float()
 
         #if args.use_wandb:
             #self.wandb = wandb
@@ -33,11 +35,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 #"batch_size": args.batch_size,
                 #"loss": args.loss,
             #})
+        
         #if args.loss == "MSE":
             #self.wandb.run.name = f"{args.task_name}_{args.model_id}_{args.model}_{args.features}_{args.train_epochs}_{args.batch_size}_{args.loss}"
-        #if args.loss == "CombinedLoss":
+        #elif args.loss == "combined_loss":
             #self.wandb.run.name = f"{args.task_name}_{args.model_id}_{args.model}_{args.features}_{args.train_epochs}_{args.batch_size}_{args.loss}"
-        #if args.loss == "LearnedReprLoss":
+        #elif args.loss == "learned_repr_loss":
             #self.wandb.run.name = f"{args.task_name}_{args.model_id}_{args.model}_{args.features}_{args.train_epochs}_{args.batch_size}_{args.loss}"
 
     def _build_model(self):
@@ -56,16 +59,25 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return model_optim
 
     def _select_criterion(self):
-        criterion = nn.MSELoss()
+        if self.args.additional is None:
+            if self.args.base == "MSE":
+                criterion_base = nn.MSELoss()
+            elif self.args.base == "MAE":
+                criterion_base = nn.L1Loss()
+            criterion_train_new = None
+        else: # additional loss
+            criterion_base = nn.MSELoss() # only for vali and test loss calculation
+            criterion_train_new = Loss(self.args)
         
-        if self.args.combined_loss:
-            criterion_ = CombinedLoss(self.args)
+        # new vali metric
+        if self.args.vali_metric == "dilate":
+            criterion_vali_new = Dilate()
         else:
-            criterion_ = None
+            criterion_vali_new = None
 
-        return criterion, criterion_
+        return criterion_base, criterion_train_new, criterion_vali_new
 
-    def vali(self, vali_data, vali_loader, criterion):
+    def vali(self, vali_data, vali_loader, criterion, test):
         total_loss = []
         self.model.eval()
         with torch.no_grad():
@@ -79,6 +91,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
@@ -89,11 +102,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
 
+                #topo_y = self.get_topo_feature(batch_x)
+
                 pred = outputs.detach().cpu()
                 true = batch_y.detach().cpu()
 
-                loss = criterion(pred, true)
-
+                if self.args.vali_metric == "dilate" and test == 0:
+                    loss, _ , _ = criterion.dilate_metric(pred, true, self.args.device, self.args.alpha_dilate, self.args.gamma_dilate, self.args.batch_size)
+                else:
+                    loss = criterion(pred, true)
+                
                 total_loss.append(loss)
         total_loss = np.average(total_loss)
         self.model.train()
@@ -114,7 +132,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
-        criterion, criterion_ = self._select_criterion()
+        criterion_base, criterion_train_new, criterion_vali_new = self._select_criterion()
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -145,32 +163,44 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                         f_dim = -1 if self.args.features == 'MS' else 0
 
-                        if self.args.combined_loss and self.args.include_input_range:
-                            outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
-                            outputs = outputs[:, :, f_dim:]
-                            batch_y = batch_y[:, :, f_dim:].to(self.device)
-                            loss = criterion_(outputs, batch_y)
-                            train_loss.append(loss.item())
+                        if self.args.additional is not None:
+                            if self.args.include_input_range:
+                                outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
+                                outputs = outputs[:, :, f_dim:]
+                                batch_y = batch_y[:, :, f_dim:].to(self.device)
+                                loss = criterion_train_new(outputs, batch_y)
+                                train_loss.append(loss.item())
+                            else:
+                                outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                                loss = criterion_train_new(outputs, batch_y)
+                                train_loss.append(loss.item())
                         else:
                             outputs = outputs[:, -self.args.pred_len:, f_dim:]
                             batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                            loss = criterion(outputs, batch_y)
+                            loss = criterion_base(outputs, batch_y)
                             train_loss.append(loss.item())
                 else:
                     outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                     f_dim = -1 if self.args.features == 'MS' else 0
 
-                    if self.args.combined_loss and self.args.include_input_range:
+                    if self.args.additional is not None:
+                        if self.args.include_input_range:
                             outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
                             outputs = outputs[:, :, f_dim:]
                             batch_y = batch_y[:, :, f_dim:].to(self.device)
-                            loss = criterion_(outputs, batch_y)
+                            loss = criterion_train_new(outputs, batch_y)
+                            train_loss.append(loss.item())
+                        else:
+                            outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                            loss = criterion_train_new(outputs, batch_y)
                             train_loss.append(loss.item())
                     else:
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
+                        loss = criterion_base(outputs, batch_y)
                         train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
@@ -191,8 +221,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            vali_loss = self.vali(vali_data, vali_loader, criterion)
-            test_loss = self.vali(test_data, test_loader, criterion)
+
+            if self.args.vali_metric is not None:
+               vali_loss = self.vali(vali_data, vali_loader, criterion_vali_new, test=0)
+            else:
+               vali_loss = self.vali(vali_data, vali_loader, criterion_base, test=0)
+
+            test_loss = self.vali(test_data, test_loader, criterion_base, test=1)
+
+            # if self.args.wandb:
+            #     self.wandb.log({
+            #         "train_loss": train_loss,
+            #         "vali_loss": vali_loss,
+            #         "test_loss": test_loss, 
+            #     })
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))
@@ -216,6 +258,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         preds = []
         trues = []
+        inputs = []
+
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
@@ -232,6 +276,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
@@ -257,10 +302,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 pred = outputs
                 true = batch_y
 
+                # input
+                input = batch_x.detach().cpu().numpy()
+                inputs.append(input)
+
                 preds.append(pred)
                 trues.append(true)
-                if i % 20 == 0:
-                    input = batch_x.detach().cpu().numpy()
+                if i % 1 == 0:
+                    #input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
                         shape = input.shape
                         input = test_data.inverse_transform(input.reshape(shape[0] * shape[1], -1)).reshape(shape)
@@ -268,12 +317,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
                     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
+        inputs = np.concatenate(inputs, axis=0)
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
         print('test shape:', preds.shape, trues.shape)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         print('test shape:', preds.shape, trues.shape)
+        print("inputs shape:", inputs.shape)
 
         # result save
         folder_path = './results/' + setting + '/'
@@ -308,6 +359,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         f.close()
 
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
+        np.save(folder_path + 'inputs.npy', inputs)
         np.save(folder_path + 'pred.npy', preds)
         np.save(folder_path + 'true.npy', trues)
         if self.args.use_dilate:

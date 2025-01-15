@@ -13,6 +13,7 @@ from utils.dtw_metric import dtw,accelerated_dtw
 from utils.dilate import Dilate
 from utils.augmentation import run_augmentation,run_augmentation_single
 from utils.losses import Loss
+from utils.pc_model import Model, PC_Model
 #import wandb
 
 warnings.filterwarnings('ignore')
@@ -21,6 +22,8 @@ warnings.filterwarnings('ignore')
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Long_Term_Forecast, self).__init__(args)
+        if args.use_ph:
+            self.get_topo_feature = PC_Model(args).float()
 
         #if args.use_wandb:
             #self.wandb = wandb
@@ -89,12 +92,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        if self.args.use_ph:
+                            batch_y_ph = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                            topo_y = self.get_topo_feature(batch_y_ph) 
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    if self.args.use_ph:
+                        batch_y_ph = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                        topo_y = self.get_topo_feature(batch_y_ph) 
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                    else:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
@@ -153,7 +168,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        if self.args.use_ph:
+                            batch_y_ph = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                            topo_y = self.get_topo_feature(batch_y_ph)
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                         # outputs dimension: [batch_size, pred_len, num_features]
 
                         f_dim = -1 if self.args.features == 'MS' else 0
@@ -176,7 +196,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                             loss = criterion_base(outputs, batch_y)
                             train_loss.append(loss.item())
                 else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    if self.args.use_ph:
+                        batch_y_ph = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                        topo_y = self.get_topo_feature(batch_y_ph)
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                    else:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                     f_dim = -1 if self.args.features == 'MS' else 0
 
@@ -272,16 +297,26 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
+                batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        if self.args.use_ph:
+                            topo_y = self.get_topo_feature(batch_y)
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    if self.args.use_ph:
+                        topo_y = self.get_topo_feature(batch_y)
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, topo_y)
+                    else:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, :]
-                batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                #batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 if test_data.scale and self.args.inverse:
@@ -303,7 +338,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 preds.append(pred)
                 trues.append(true)
-                if i % 5 == 0:
+                if i % 10 == 0:
                     #input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
                         shape = input.shape

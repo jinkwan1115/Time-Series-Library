@@ -96,16 +96,20 @@ if __name__ == '__main__':
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
     # loss function
-    parser.add_argument('--loss', type=str, default='MSE', help='loss function')
-    parser.add_argument('--combined_loss', action='store_true', help='use combined loss', default=False)
-    parser.add_argument('--alpha_additional_loss', type=float, default=0.1, help='alpha for additional loss')
-    # laguerre
-    parser.add_argument('--use_laguerre', action='store_true', help='use laguerre loss', default=False)
-    parser.add_argument('--degree', type=int, default=5, help='degree of laguerre polynomial')
-    # frequency(fourier)
-    parser.add_argument('--use_freq', action='store_true', help='use frequency loss', default=False)
-    parser.add_argument('--freq_loss_type', type=str, default='complex', help='type of frequency loss')
-
+    parser.add_argument('--base', type=str, default='MSE', help='base loss function(MSE, MAE)')
+    parser.add_argument('--additional', type=str, default=None, help='additional loss function(window, fourier, laguerre, legendre, chebyshev, hermite, repr_cka)')
+    parser.add_argument('--alpha', type=float, default=0.1, help='alpha for additional loss')
+    parser.add_argument('--include_input_range', action='store_true', help='include input range in loss', default=False)
+    # additional loss - window
+    parser.add_argument('--distance', type=str, default='EM', help='distance for window loss')
+    parser.add_argument('--temp_to', type=str, default='both', help='temp to for window loss')
+    parser.add_argument('--temp', type=float, default=0.01, help='temp for window loss')
+    # additional loss - laguerre / legendre / chebyshev / hermite
+    parser.add_argument('--degree', type=int, default=5, help='degree of laguerre / legendre / chebyshev / hermite polynomial')
+    # additional loss - fourier
+    parser.add_argument('--fourier_loss_type', type=str, default='complex', help='type of frequency loss')
+    # additional loss - repr_cka
+    parser.add_argument('loss_model_path', type=str, default='./checkpoints/loss_model_setting/ckeckpoint.pth', help='path to loss model')
 
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
@@ -126,6 +130,7 @@ if __name__ == '__main__':
                         help='the controller of using dilate metric (dilate metric is time consuming, not suggested unless necessary)')
     parser.add_argument('--alpha_dilate', type=float, default=0.5,  help='the alpha for dilate metric')
     parser.add_argument('--gamma_dilate', type=float, default=0.001,  help='the gamma for dilate metric')
+    parser.add_argument('--vali_metric', type=str, default='dilate', help='validation metric(dilate)')
     
     # Augmentation
     parser.add_argument('--augmentation_ratio', type=int, default=0, help="How many times to augment")
