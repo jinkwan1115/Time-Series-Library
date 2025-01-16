@@ -237,25 +237,32 @@ class HermiteLoss(nn.Module):
         return hermite_loss
 
 
-# Representation CKA Loss
-class ReprCKALoss(nn.Module):
+# Loss Network
+class LossNetwork(nn.Module):
     def __init__(self, args):
-        super(ReprCKALoss, self).__init__()
+        super(LossNetwork, self).__init__()
         self.args = args
-        self.loss_model = t.load(self.args.loss_model_path)
-        self.enc_embedding = self.loss_model.enc_embedding
-        self.encoder = self.loss_model.encoder
+        self.device = self.args.device
 
+        if self.args.include_input_range:
+            self.loss_network = nn.Sequential(
+                nn.Linear(args.enc_in, 100),
+                nn.ReLU(),
+                nn.Linear(100, 64)
+            ).to(self.device)
+        else:
+            self.loss_network = nn.Sequential(
+                nn.Linear(args.enc_in, 100),
+                nn.ReLU(),
+                nn.Linear(100, 64)
+            ).to(self.device)
+        
     def forward(self, predictions, targets):
-        # TODO: Implement ReprLoss
-        repr_pred = self.enc_embedding(predictions)
-        repr_pred = self.encoder(repr_pred)
-
-        repr_target = self.enc_embedding(targets)
-        repr_target = self.encoder(repr_target)
+        repr_pred = self.loss_network(predictions.to(self.device))
+        repr_target = self.loss_network(targets.to(self.device))
 
         #CKA(Centered Kernel Alignment) loss
-        repr_CKA_loss = cka_torch(repr_pred, repr_target)
+        repr_CKA_loss = cka_torch(repr_pred, repr_target, self.device)
 
         return repr_CKA_loss
 
@@ -283,8 +290,8 @@ class Loss(nn.Module):
             self.additional_loss = ChebyshevLoss(self.args)
         elif self.args.additional == "hermite":
             self.additional_loss = HermiteLoss(self.args)
-        elif self.args.additional == "repr_cka":
-            self.additional_loss = ReprCKALoss(self.args)
+        elif self.args.additional == "loss_network":
+            self.additional_loss = LossNetwork(self.args)
         else:
             raise ValueError("Invalid additional loss type")
 

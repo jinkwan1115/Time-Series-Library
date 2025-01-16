@@ -37,6 +37,6 @@ python -u /home/jinkwanjang/Time-Series-Library/run_tide.py \
   --d_ff 512 \
   --batch_size 4 \
   --learning_rate 0.001 \
-  --train_epochs 10 \
+  --train_epochs 3 \
   --des 'Exp' \
   --itr 1 \
