@@ -243,19 +243,11 @@ class LossNetwork(nn.Module):
         super(LossNetwork, self).__init__()
         self.args = args
         self.device = self.args.device
-
-        if self.args.include_input_range:
-            self.loss_network = nn.Sequential(
-                nn.Linear(args.enc_in, 100),
-                nn.ReLU(),
-                nn.Linear(100, 64)
-            ).to(self.device)
-        else:
-            self.loss_network = nn.Sequential(
-                nn.Linear(args.enc_in, 100),
-                nn.ReLU(),
-                nn.Linear(100, 64)
-            ).to(self.device)
+        self.loss_network = nn.Sequential(
+            nn.Linear(args.enc_in, 100),
+            nn.ReLU(),
+            nn.Linear(100, 64)
+        ).to(self.device)
         
     def forward(self, predictions, targets):
         repr_pred = self.loss_network(predictions.to(self.device))
