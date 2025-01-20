@@ -9,11 +9,10 @@ import os
 import time
 import warnings
 import numpy as np
-from itertools import chain
 from utils.dtw_metric import dtw,accelerated_dtw
 from utils.dilate import Dilate
 from utils.augmentation import run_augmentation,run_augmentation_single
-from utils.losses import Loss, LossNetwork
+from utils.losses import Loss, ReprLoss, LearnableNetwork
 from utils.pc_model import Model, PC_Model
 #import wandb
 
@@ -26,8 +25,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if args.use_ph:
             self.get_topo_feature = PC_Model(args).float()
 
-        if args.additional == "loss_network":
-            self.loss_network = self._build_loss_network()
+        if args.adversarial:
+            self.discriminator = self._build_discriminator()
 
         #if args.use_wandb:
             #self.wandb = wandb
@@ -55,23 +54,32 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
 
-    def _build_loss_network(self):
-        loss_network = LossNetwork(self.args).float()
+    # def _build_learnable_network(self):
+    #     """
+    #     Build the loss network using the LearnableNetwork class.
+    #     """
+    #     repr_network = LearnableNetwork(self.args).repr_network.to(self.device)
+    #     return repr_network
 
-        if self.args.use_multi_gpu and self.args.use_gpu:
-            loss_network = nn.DataParallel(loss_network, device_ids=self.args.device_ids)
-        return loss_network
+    def _build_discriminator(self):
+        """
+        Build the discriminator using the LearnableNetwork class.
+        """
+        discriminator = LearnableNetwork(self.args).discriminator.to(self.device)
+        return discriminator
 
     def _get_data(self, flag):
         data_set, data_loader = data_provider(self.args, flag)
         return data_set, data_loader
 
     def _select_optimizer(self):
-        if self.args.additional == "loss_network":
-            model_optim = optim.Adam(chain(self.model.parameters(), self.loss_network.parameters()), lr=self.args.learning_rate)
+        model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        if self.args.adversarial:
+            #repr_network_optim = optim.Adam(self.repr_network.parameters(), lr=self.args.learning_rate)
+            discriminator_optim = optim.Adam(self.discriminator.parameters(), lr=self.args.learning_rate)
+            return model_optim, discriminator_optim
         else:
-            model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
-        return model_optim
+            return model_optim
 
     def _select_criterion(self):
         if self.args.additional is None:
@@ -79,8 +87,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 criterion_base = nn.MSELoss()
             elif self.args.base == "MAE":
                 criterion_base = nn.L1Loss()
-            criterion_train_new = None
-        else: # additional loss
+            
+            if self.args.repr_loss: # representation loss option
+                criterion_train_new = ReprLoss(self.args)
+            elif self.args.adversarial:
+                criterion_train_new = LearnableNetwork(self.args)
+            else:
+                criterion_train_new = None
+        
+        else: # additional loss options
             criterion_base = nn.MSELoss() # only for vali and test loss calculation
             criterion_train_new = Loss(self.args).to(self.device)
         
@@ -155,7 +170,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         train_steps = len(train_loader)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
-        model_optim = self._select_optimizer()
+        if self.args.adversarial:
+            model_optim, discriminator_optim = self._select_optimizer()
+        else:
+            model_optim = self._select_optimizer()
         criterion_base, criterion_train_new, criterion_vali_new = self._select_criterion()
 
         if self.args.use_amp:
@@ -164,6 +182,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
+            if self.args.adversarial:
+                MSE_loss = []
+                loss_F = []
+                loss_D = []
 
             self.model.train()
             epoch_time = time.time()
@@ -199,32 +221,35 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                                 batch_y = batch_y[:, :, f_dim:].to(self.device)
                                 loss = criterion_train_new(outputs, batch_y)
 
-                                if self.args.additional == "loss_network":
-                                    repr_loss = self.loss_network(outputs, batch_y)
-                                    loss = loss + repr_loss
-
                                 train_loss.append(loss.item())
                             else:
                                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                                 loss = criterion_train_new(outputs, batch_y)
 
-                                if self.args.additional == "loss_network":
-                                    repr_loss = self.loss_network(outputs, batch_y)
-                                    loss = loss + repr_loss
-
                                 train_loss.append(loss.item())
                         else:
                             outputs = outputs[:, -self.args.pred_len:, f_dim:]
                             batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                            loss = criterion_base(outputs, batch_y)
 
-                            if self.args.additional == "loss_network":
-                                repr_loss = self.loss_network(outputs, batch_y)
-                                loss = loss + repr_loss
+                            if self.args.repr_loss:
+                                loss = criterion_train_new(batch_x, outputs, batch_y)
+                                train_loss.append(loss.item())
+                            
+                            elif self.args.adversarial:
+                                mse_loss = criterion_base(outputs, batch_y)
+                                MSE_loss.append(mse_loss.item())
 
-                            train_loss.append(loss.item())
+                                loss_f, loss_d = criterion_train_new(batch_x, outputs, batch_y)
+                                loss_F.append(loss_f.item())
+                                loss_D.append(loss_d.item())
 
+                                loss = mse_loss + self.args.lambda_F * loss_f
+                                train_loss.append(loss.item())
+                            
+                            else:
+                                loss = criterion_base(outputs, batch_y)
+                                train_loss.append(loss.item())
 
                 else:
                     if self.args.use_ph:
@@ -241,13 +266,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                             outputs = torch.cat([batch_y[:, :self.args.label_len, :], outputs], dim=1).float().to(self.device)
                             outputs = outputs[:, :, f_dim:]
                             batch_y = batch_y[:, :, f_dim:].to(self.device)
-                            #print(outputs.shape)
-                            
                             loss = criterion_train_new(outputs, batch_y)
-
-                            if self.args.additional == "loss_network":
-                                repr_loss = self.loss_network(outputs, batch_y)
-                                loss = loss + repr_loss
 
                             train_loss.append(loss.item())
                         else:
@@ -255,24 +274,36 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                             batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                             loss = criterion_train_new(outputs, batch_y)
 
-                            if self.args.additional == "loss_network":
-                                repr_loss = self.loss_network(outputs, batch_y)
-                                loss = loss + repr_loss
-
                             train_loss.append(loss.item())
                     else:
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion_base(outputs, batch_y)
 
-                        if self.args.additional == "loss_network":
-                            repr_loss = self.loss_network(outputs, batch_y)
-                            loss = loss + repr_loss
+                        if self.args.repr_loss:
+                            loss = criterion_train_new(batch_x, outputs, batch_y)
+                            train_loss.append(loss.item())
+                        
+                        elif self.args.adversarial:
+                            mse_loss = criterion_base(outputs, batch_y)
+                            MSE_loss.append(mse_loss.item())
 
-                        train_loss.append(loss.item())
+                            loss_f, loss_d = criterion_train_new(batch_x, outputs, batch_y)
+                            loss_F.append(loss_f.item())
+                            loss_D.append(loss_d.item())
 
+                            loss = mse_loss + self.args.lambda_F * loss_f
+                            train_loss.append(loss.item())
+                        
+                        else:
+                            loss = criterion_base(outputs, batch_y)
+                            train_loss.append(loss.item())
+
+                        
                 if (i + 1) % 100 == 0:
-                    print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                    if self.args.adversarial:
+                        print("\titers: {0}, epoch: {1} | mse_loss: {2:.7f} | loss_F: {3:.7f} | loss_D: {4:.7f}".format(i + 1, epoch + 1, mse_loss.item(), loss_f.item(), loss_d.item()))
+                    else:
+                        print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
@@ -284,12 +315,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     scaler.step(model_optim)
                     scaler.update()
                 else:
-                    loss.backward()
-                    model_optim.step()
+                    if self.args.adversarial:
+                        discriminator_optim.zero_grad()
+                        loss_d.backward()
+                        discriminator_optim.step()
+                        
+                        model_optim.zero_grad()
+                        loss.backward()
+                        model_optim.step()
+                    else:
+                        loss.backward()
+                        model_optim.step()
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            
             train_loss = np.average(train_loss)
-
+            
             if self.args.vali_metric is not None:
                vali_loss = self.vali(vali_data, vali_loader, criterion_vali_new, test=0)
             else:

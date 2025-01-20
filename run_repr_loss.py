@@ -37,6 +37,8 @@ if __name__ == '__main__':
     parser.add_argument('--freq', type=str, default='h',
                         help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+    parser.add_argument('--batch_not_shuffle', type=bool, default=False, help='batch not shuffle')
+    parser.add_argument('--sample_stride', action='store_true', help='sample stride', default=False)
 
     # forecasting task
     parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
@@ -98,7 +100,7 @@ if __name__ == '__main__':
     
     # loss function
     parser.add_argument('--base', type=str, default='MSE', help='base loss function(MSE, MAE)')
-    parser.add_argument('--additional', type=str, default=None, help='additional loss function(window, fourier, laguerre, legendre, chebyshev, hermite, loss_network)')
+    parser.add_argument('--additional', type=str, default=None, help='additional loss function(window, fourier, laguerre, legendre, chebyshev, hermite, quantile)')
     parser.add_argument('--alpha', type=float, default=0.1, help='alpha for additional loss')
     parser.add_argument('--include_input_range', action='store_true', help='include input range in loss', default=False)
     # additional loss - window
@@ -109,6 +111,14 @@ if __name__ == '__main__':
     parser.add_argument('--degree', type=int, default=5, help='degree of laguerre / legendre / chebyshev / hermite polynomial')
     # additional loss - fourier
     parser.add_argument('--fourier_loss_type', type=str, default='complex', help='type of frequency loss')
+    # additional loss - quantile
+    parser.add_argument('--q', type=float, default=0.5, help='quantile for quantile loss')
+    # chronos representation loss
+    parser.add_argument('--repr_loss', action='store_true', help='use representation loss', default=False)
+    parser.add_argument('--repr_model', type=str, default='chronos', help='model name for representation loss')
+    # adversarial loss
+    parser.add_argument('--adversarial', action='store_true', help='use adversarial loss', default=False)
+    parser.add_argument('--lambda_F', type=float, default=0.5, help='lambda for adversarial loss')
 
     # Persistence Homology
     parser.add_argument('--use_ph', type=bool, default=False, help='use persistence homology')
@@ -198,14 +208,15 @@ if __name__ == '__main__':
         for ii in range(args.itr):
             # setting record of experiments
             exp = Exp(args)  # set experiments
-            setting = '{}_{}_{}_ft{}_base{}_additional{}_include_input{}_des{}_{}'.format(
+            setting = '{}_{}_{}_ft{}_{}_base{}_alpha{}_batch_not_shuffle{}_des{}_{}'.format(
                 args.task_name,
                 args.model_id,
                 args.model,
                 args.features,
+                args.repr_model,
                 args.base,
-                args.additional,
-                args.include_input_range,
+                args.alpha,
+                args.batch_not_shuffle,
                 args.des, ii)
 
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
@@ -219,14 +230,15 @@ if __name__ == '__main__':
                 torch.cuda.empty_cache()
     else:
         ii = 0
-        setting = '{}_{}_{}_ft{}_base{}_additional{}_include_input{}_des{}_{}'.format(
+        setting = '{}_{}_{}_ft{}_{}_base{}_alpha{}_batch_not_shuffle{}_des{}_{}'.format(
             args.task_name,
             args.model_id,
             args.model,
             args.features,
+            args.repr_model,
             args.base,
-            args.additional,
-            args.include_input_range,
+            args.alpha,
+            args.batch_not_shuffle,
             args.des, ii)
 
         exp = Exp(args)  # set experiments

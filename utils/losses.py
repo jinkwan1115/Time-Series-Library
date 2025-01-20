@@ -18,12 +18,13 @@ Various Loss functions for Time Series Analysis
 
 import torch as t
 import torch.nn as nn
+from torch.jit import script
 import numpy as np
 import pdb
 
 from utils.polynomials import laguerre_torch, hermite_torch, legendre_torch, chebyshev_torch
-from utils.cka import cka_torch
-
+from utils.chronos_repr import ChronosRepr
+from utils.adversarial import AdversarialLoss
 def divide_no_nan(a, b):
     """
     a/b where the resulted NaN or Inf are replaced by 0.
@@ -237,27 +238,139 @@ class HermiteLoss(nn.Module):
         return hermite_loss
 
 
-# Loss Network
-class LossNetwork(nn.Module):
+# Quantile Loss
+class QuantileLoss(nn.Module):
     def __init__(self, args):
-        super(LossNetwork, self).__init__()
+        super(QuantileLoss, self).__init__()
+        self.args = args
+        self.q = self.args.q
+
+    def forward(self, inputs, predictions, targets):
+        diff = predictions - targets
+        loss = t.max(self.q * diff, (self.q - 1) * diff)
+        return t.mean(loss) 
+
+
+# Representation Loss
+class ReprLoss(nn.Module):
+    def __init__(self, args):
+        super(ReprLoss, self).__init__()
         self.args = args
         self.device = self.args.device
-        self.loss_network = nn.Sequential(
-            nn.Linear(args.enc_in, 100),
-            nn.ReLU(),
-            nn.Linear(100, 64)
-        ).to(self.device)
+        self.base_loss = nn.MSELoss()
+        self.alpha = self.args.alpha
         
-    def forward(self, predictions, targets):
-        repr_pred = self.loss_network(predictions.to(self.device))
-        repr_target = self.loss_network(targets.to(self.device))
+    def forward(self, inputs, predictions, targets):
+        batch_size, seq_len, num_features = inputs.shape
+        seq_len_pred_tar = predictions.shape[1]
 
-        #CKA(Centered Kernel Alignment) loss
-        repr_CKA_loss = cka_torch(repr_pred, repr_target, self.device)
+        base_loss = self.base_loss(predictions, targets)
 
-        return repr_CKA_loss
+        inputs = inputs.permute(0, 2, 1).reshape(-1, seq_len).to(self.device) # (batch_size * num_features, seq_len)
+        predictions = predictions.permute(0, 2, 1).reshape(-1, seq_len_pred_tar).to(self.device) # (batch_size * num_features, seq_len)
+        targets = targets.permute(0, 2, 1).reshape(-1, seq_len_pred_tar).to(self.device) # (batch_size * num_features, seq_len)
 
+        repr_model = ChronosRepr(self.args.repr_model)
+
+        # Process sequences one by one for compatibility with chronos_repr
+        repr_inp = t.stack([
+            repr_model.get_repr(inputs[i].to(self.device))[0,-1,:] # last special token
+            for i in range(inputs.shape[0])
+        ])
+        repr_pred = t.stack([
+            repr_model.get_repr(predictions[i].to(self.device))[0,-1,:] # last special token
+            for i in range(predictions.shape[0])
+        ])
+        repr_tar = t.stack([
+            repr_model.get_repr(targets[i].to(self.device))[0,-1,:] # last special token
+            for i in range(targets.shape[0])
+        ])
+        
+        hidden_dim = 512  # Fixed hidden dimension
+        repr_inp = repr_inp.view(batch_size, num_features, hidden_dim)
+        repr_pred = repr_pred.view(batch_size, num_features, hidden_dim)
+        repr_tar = repr_tar.view(batch_size, num_features, hidden_dim)
+
+        # Compute loss per sample and per variable
+        abs_loss = t.mean(t.abs(repr_pred - repr_tar), dim=-1)  # [batch_size, num_features]
+        # Convert cosine similarity to a loss (1 - cosine similarity)
+        # Higher loss if the vectors are not aligned (cos_sim < 1)
+        one_tensor = t.tensor(1.0, device=repr_pred.device, requires_grad=True)
+        cos_loss = one_tensor - nn.functional.cosine_similarity(repr_pred, repr_tar, dim=-1)  # [batch_size, num_features]
+        
+        # Average over variables and batch
+        repr_loss = t.mean(abs_loss + cos_loss)  # Final scalar loss
+
+        return (1 - self.alpha) * base_loss + self.alpha * repr_loss
+
+# Learnable Network with Adversarial Loss
+class LearnableNetwork(nn.Module):
+    def __init__(self, args):
+        super(LearnableNetwork, self).__init__()
+        self.args = args
+        self.device = self.args.device
+
+        # # Learnable Network
+        # self.repr_network = nn.Sequential(
+        #     nn.Linear(args.enc_in, 100),
+        #     nn.ReLU(),
+        #     nn.Linear(100, 100),
+        #     nn.ReLU(),
+        #     nn.Linear(100, 64)
+        # ).to(self.device)
+
+        # Discriminator
+        self.discriminator = nn.Sequential(
+            nn.Linear(512, 1000),
+            nn.ReLU(),
+            nn.Linear(1000, 500),
+            nn.ReLU(),
+            nn.Linear(500, 250),
+            nn.ReLU(),
+            nn.Linear(250, 1),
+            nn.Sigmoid()
+        ).to(self.device)
+
+    def forward(self, inputs, predictions, targets):
+        X_Y_hat = t.cat((inputs, predictions), dim=1).to(self.device) # (batch_size, seq_len + seq_len_pred, num_features(enc_in))
+        X_Y = t.cat((inputs, targets), dim=1).to(self.device) # (batch_size, seq_len + seq_len_pred, num_features(enc_in))
+
+        # repr_X_Y_hat = self.repr_network(X_Y_hat)
+        # repr_X_Y = self.repr_network(X_Y)
+
+        batch_size, X_Y_len, num_features = X_Y.shape
+
+        X_Y_hat = X_Y_hat.permute(0, 2, 1).reshape(-1, X_Y_len).to(self.device) # (batch_size * num_features, seq_len + seq_len_pred)
+        X_Y = X_Y.permute(0, 2, 1).reshape(-1, X_Y_len).to(self.device) # (batch_size * num_features, seq_len + seq_len_pred)
+
+        repr_model = ChronosRepr(self.args.repr_model)
+        
+        repr_X_Y_hat = t.stack([
+            repr_model.get_repr(X_Y_hat[i].to(self.device))[0,-1,:] # last special token
+            for i in range(X_Y_hat.shape[0])
+        ])
+        repr_X_Y = t.stack([
+            repr_model.get_repr(X_Y[i].to(self.device))[0,-1,:] # last special token
+            for i in range(X_Y.shape[0])
+        ])
+
+        hidden_dim = 512  # Fixed hidden dimension
+        repr_X_Y_hat = repr_X_Y_hat.view(-1, hidden_dim).float()
+        repr_X_Y = repr_X_Y.view(-1, hidden_dim).float()
+
+        loss_F = 0
+        loss_D = 0
+        for i in range(batch_size * num_features):
+            # Discriminator outputs
+            pred = self.discriminator(repr_X_Y_hat[i].to(self.device))  # For predictions (fake)
+            pred_detached = pred.detach()
+            true = self.discriminator(repr_X_Y[i].to(self.device))      # For targets (real)
+
+            adversarial_loss = AdversarialLoss()
+            loss_F += adversarial_loss.generator_loss(pred).to(self.device)
+            loss_D += adversarial_loss.discriminator_loss(pred_detached, true).to(self.device)
+
+        return loss_F, loss_D
 
 ########################################################################################################
 class Loss(nn.Module):
@@ -282,8 +395,8 @@ class Loss(nn.Module):
             self.additional_loss = ChebyshevLoss(self.args)
         elif self.args.additional == "hermite":
             self.additional_loss = HermiteLoss(self.args)
-        elif self.args.additional == "loss_network":
-            self.additional_loss = LossNetwork(self.args)
+        elif self.args.additional == "quantile":
+            self.additional_loss = QuantileLoss(self.args)
         else:
             raise ValueError("Invalid additional loss type")
 
@@ -296,4 +409,8 @@ class Loss(nn.Module):
         if self.alpha == 0:
             return self.base_loss(predictions, targets)
         else:
-            return (1 - self.alpha) * self.base_loss(predictions, targets) + self.alpha * self.additional_loss(predictions, targets)
+            base_loss = self.base_loss(predictions, targets)
+            additional_loss = self.additional_loss(predictions, targets)
+            #print("base_loss: ", base_loss)
+            #print("additional_loss: ", additional_loss)
+            return (1 - self.alpha) * base_loss + self.alpha * additional_loss

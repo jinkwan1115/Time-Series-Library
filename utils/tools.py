@@ -90,6 +90,30 @@ def visual(true, preds=None, name='./pic/test.pdf'):
     plt.savefig(name, bbox_inches='tight')
 
 
+def visual_sample(inputs, targets, name='./pic/test.pdf'):
+    plt.figure()
+
+    # Plot inputs and targets
+    plt.plot(range(len(inputs)), inputs, label='Inputs', linewidth=2)
+    plt.plot(range(len(inputs) - 1, len(inputs) + len(targets) - 1), targets, label='Targets', linewidth=2)
+    
+    # Add a vertical dashed line at the boundary
+    boundary_index = len(inputs) - 1  # The last index of inputs
+    plt.axvline(x=boundary_index, color='gray', linestyle='--', linewidth=1)
+
+    # # Set custom x-ticks
+    # x_ticks = list(range(0, len(inputs) + len(targets) - 1, 20))
+    # x_labels = [str(x) for x in x_ticks]
+    # plt.xticks(ticks=x_ticks, labels=x_labels)
+
+    # Set x-axis limits to remove extra padding
+    plt.xlim(0, len(inputs) + len(targets) -0.5)
+    
+    plt.legend()
+
+    plt.savefig(name, bbox_inches='tight')
+
+
 def adjustment(gt, pred):
     anomaly_state = False
     for i in range(len(gt)):
